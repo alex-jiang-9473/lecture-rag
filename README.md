@@ -19,6 +19,10 @@ A lightweight retrieval-augmented generation project for lecture PDFs.
 - `processing/qdrant_store.py`: Qdrant upsert helper used by the processing pipeline.
 - `rag-service/`: FastAPI RAG service that exposes `/`, `/health`, and `/ask`.
 
+## UI Preview
+
+![UI sample](ui_sample.png)
+
 ## Prerequisites
 
 - Python 3.10+
