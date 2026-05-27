@@ -9,7 +9,7 @@ from qdrant_client import QdrantClient
 from qdrant_client.http import models as qdrant_models
 
 from .config import settings
-from .langchain_support import FastEmbedEmbeddingsAdapter
+from .langchain_support import FastEmbedEmbeddingsAdapter, QdrantRetriever, RetrievalQA
 
 
 class RAGService:
@@ -26,6 +26,17 @@ class RAGService:
         self.system_message = (
             "You must answer questions using ONLY the provided lecture context. "
             "Do not use any external knowledge. If the context does not contain the answer, reply exactly: \"I don't know.\""
+        )
+        # build a LangChain-style retriever + QA wrapper
+        retriever = QdrantRetriever(self.qdrant, self.embeddings, settings.collection_name)
+        self.qa = RetrievalQA(
+            retriever=retriever,
+            groq_client=self.client,
+            system_message=self.system_message,
+            max_context_chars=self._MAX_CONTEXT_CHARS,
+            max_chunk_chars=self._MAX_CHUNK_CHARS,
+            minimum_relevance_score=getattr(settings, "minimum_relevance_score", 0.0),
+            model_name=settings.llm_model,
         )
 
     async def ensure_ready(self) -> None:
@@ -52,51 +63,8 @@ class RAGService:
 
     async def answer(self, question: str, top_k: int | None = None) -> dict[str, Any]:
         limit = top_k or settings.default_top_k
-        rows = await asyncio.to_thread(self._search_chunks, question, limit)
-
-        if not rows:
-            return {
-                "answer": "I don't know.",
-                "context": [],
-                "sources": [],
-            }
-
-        best_score = float(rows[0].score or 0.0)
-        if best_score < settings.minimum_relevance_score:
-            return {
-                "answer": "I don't know.",
-                "context": [],
-                "sources": [],
-            }
-
-        context: list[dict[str, Any]] = []
-        for chunk in rows:
-            payload = chunk.payload or {}
-            context.append(
-                {
-                    "source": payload.get("source"),
-                    "page": payload.get("page"),
-                    "chunk_index": payload.get("chunk_index"),
-                    "score": float(chunk.score or 0.0),
-                    "text": payload.get("text", ""),
-                }
-            )
-
-        if not context:
-            return {
-                "answer": "I don't know.",
-                "context": [],
-                "sources": [],
-            }
-
-        prompt_context = self._format_context(context)
-        answer = await asyncio.to_thread(self._generate_answer, prompt_context, question)
-        sources = list(dict.fromkeys(item["source"] for item in context))
-        return {
-            "answer": answer,
-            "context": context,
-            "sources": sources,
-        }
+        result = await asyncio.to_thread(self.qa.run, question, limit)
+        return result
 
     async def _store_chunks(self, chunk_records: list[dict[str, Any]], clear_existing: bool) -> int:
         raise HTTPException(status_code=404, detail="Chunk storage removed; this service only answers questions")

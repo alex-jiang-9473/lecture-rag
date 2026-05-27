@@ -73,7 +73,7 @@ Place PDFs in:
 Run the processing pipeline from the project root:
 
 ```bash
-python processing/chunkpdf.py
+python -m processing/chunkpdf.py
 ```
 
 This script writes `lectures_chunks.jsonl` and, when `database_url` is set in `config.yaml`, inserts rows into PostgreSQL and upserts vectors into Qdrant.
@@ -90,6 +90,25 @@ uvicorn app.main:app --reload
 ```
 
 Open `http://127.0.0.1:8000/docs` for the interactive API docs.
+
+## Web UI (development)
+
+A simple React + Vite frontend is included in `rag-ui/`. To run the development server from the project root:
+
+```bash
+cd rag-ui
+npm install
+npm run dev
+```
+
+To build and preview a production bundle:
+
+```bash
+cd rag-ui
+npm install
+npm run build
+npm run preview
+```
 
 ### 4) Query the service
 
