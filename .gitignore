@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+.venv/
+venv/
+env/
+ENV/
+
+# VS Code
+.vscode/
+
+# JetBrains
+.idea/
+
+# Logs and databases
+*.log
+*.sqlite3
+.pytest_cache/
+
+# Mac
+.DS_Store
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Build
+build/
+dist/
+
+# Local artifacts
+lectures_chunks.jsonl
+.env
+config.yaml

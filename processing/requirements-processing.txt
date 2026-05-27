@@ -1,0 +1,7 @@
+fastembed>=0.4
+pymupdf>=1.24
+transformers>=4.41
+numpy>=1.26
+qdrant-client>=1.10
+psycopg[binary]>=3.2
+pyyaml>=6.0

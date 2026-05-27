@@ -1,0 +1,15 @@
+collection_name: lecture_chunks
+groq_api_key: "your-groq-api-key"
+qdrant_url: http://localhost:6333
+qdrant_api_key: ""
+frontend_origins:
+  - http://localhost:5173
+  - http://127.0.0.1:5173
+llm_model: groq/compound
+embed_model: BAAI/bge-small-en-v1.5
+chunk_max_tokens: 400
+chunk_overlap_tokens: 40
+embedding_dim: 384
+default_top_k: 3
+minimum_relevance_score: 0.5
+database_url: postgresql://admin:secret@127.0.0.1:5432/lecture_rag

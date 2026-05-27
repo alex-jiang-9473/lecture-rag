@@ -1,147 +1,114 @@
-# Lectures RAG (Qdrant + FastEmbed + Qwen)
+# Lectures RAG
 
-A lightweight Retrieval-Augmented Generation (RAG) project for lecture PDFs.
+A lightweight retrieval-augmented generation project for lecture PDFs.
 
 ## What This Project Includes
 
-- PDF parsing and chunking to JSONL
+- PDF parsing and token-aware chunking
+- Shared YAML config in `config.yaml`
 - FastEmbed embeddings
-- Qdrant vector search
-- Qwen chat completion via OpenAI-compatible API (Ollama endpoint style)
-- Interactive terminal Q&A for lecture content
-
-## Examples
-
-### Same Question, Different Behavior (LLM vs RAG)
-
-Question:
-
-`what is cosine similarity?`
-
-LLM-only answer (no retrieval):
-
-- Gives a general textbook definition.
-- Usually cannot cite your specific lecture files.
-- May omit course-specific terms/examples from your notes.
-
-RAG answer (with retrieval from Qdrant):
-
-- Includes the same core definition.
-- Grounds the response in your indexed lecture chunks.
-- Returns source files from your `lectures/` folder.
-
-Example RAG output pattern:
-
-```text
-ANSWER:
-Cosine similarity measures the angle-based similarity between vectors...
-
-SOURCES: .../lectures/lsh-1.pdf, .../lectures/collaborative_filtering-1.pdf
-RETRIEVED 3 CHUNKS
-```
-
-Why this proves augmentation:
-
-- `SOURCES` points to your local lecture PDFs.
-- `RETRIEVED N CHUNKS` confirms vector search was used.
-- Answer wording should match lecture-specific content, not only generic definitions.
+- Qdrant-backed retrieval for lecture chunks
+- PostgreSQL storage for chunk text inspection in pgAdmin
+- FastAPI RAG service
+- Groq chat completion via the Groq SDK
 
 ## Project Files
 
-- `chunkpdf.py`: Parse PDFs from `lectures/` and generate `lectures_chunks.jsonl`
-- `embeddings.py`: FastEmbed wrapper for batch text embeddings
-- `lectures_rag.py`: Interactive RAG chat (retrieve from Qdrant + ask LLM)
-- `qwenllm.py`: Simple direct LLM call test
-- `fastemb_qdrant.py`: Small standalone Qdrant + FastEmbed demo
-- `quickstart.py`: Basic Qdrant vector operations example
+- `processing/chunkpdf.py`: Parses PDFs from `lectures/`, generates `lectures_chunks.jsonl`, and persists chunks to Postgres and Qdrant.
+- `processing/postgres_store.py`: PostgreSQL persistence for parsed lecture chunks.
+- `processing/qdrant_store.py`: Qdrant upsert helper used by the processing pipeline.
+- `rag-service/`: FastAPI RAG service that exposes `/`, `/health`, and `/ask`.
 
 ## Prerequisites
 
 - Python 3.10+
-- Running Qdrant instance (default: `http://localhost:6333`)
-- Running OpenAI-compatible LLM endpoint (default: `http://127.0.0.1:11434/v1`)
+- PostgreSQL 15+ if you want to inspect chunk text in pgAdmin
+- Qdrant running locally or remotely
+- Groq API key configured in `config.yaml`
 
 ## Install
 
+From the project root:
+
 ```bash
 python -m venv .venv
-source .venv/bin/activate
+source .venv/bin/activate  # or .\.venv\Scripts\activate on Windows
 pip install --upgrade pip
-pip install qdrant-client fastembed pymupdf openai transformers
+pip install -r requirements.txt
 ```
 
-## Environment Variables
-
-Optional overrides:
+If you only need one half of the project:
 
 ```bash
-export EMBED_MODEL=BAAI/bge-small-en-v1.5
-export CHUNK_MAX_TOKENS=1000
-export CHUNK_OVERLAP_TOKENS=200
-export QDRANT_URL=http://localhost:6333
-export QDRANT_COLLECTION=lectures_collection
-export LLM_BASE_URL=http://127.0.0.1:11434/v1
-export LLM_MODEL=qwen3:14b
-export RAG_TOP_K=3
+pip install -r rag-service/requirements-backend.txt
+pip install -r processing/requirements-processing.txt
 ```
+
+## Configuration
+
+Edit `config.yaml` in the project root to change model, chunking, database, and retrieval settings.
+
+Key settings:
+- `chunk_max_tokens`: maximum tokens per chunk. Lower values create smaller chunks and can help keep prompts smaller.
+- `chunk_overlap_tokens`: overlap between adjacent chunks. Lower values reduce duplicate context.
+- `default_top_k`: number of chunks retrieved per question. Lower values reduce prompt size.
+- `minimum_relevance_score`: score cutoff used by the RAG service. If the best match is below this value, the answer is `I don't know.`
 
 ## End-to-End Workflow
 
 ### 1) Put lecture PDFs in `lectures/`
 
-Expected location:
+Place PDFs in:
 
-- `./lectures/*.pdf`
-
-### 2) Chunk PDFs into JSONL
-
-```bash
-python chunkpdf.py
+```text
+./lectures/*.pdf
 ```
 
-This generates:
+### 2) Chunk PDFs and index them
 
-- `lectures_chunks.jsonl`
-
-### 3) Index chunks into Qdrant
-
-Use your indexing script if you have one in your local branch.
-
-If not, you can still test Qdrant embedding flow with:
+Run the processing pipeline from the project root:
 
 ```bash
-python fastemb_qdrant.py
+python processing/chunkpdf.py
 ```
 
-Note: `lectures_rag.py` expects a collection (default `lectures_collection`) containing payload fields like `text`, `source`, and `page`.
+This script writes `lectures_chunks.jsonl` and, when `database_url` is set in `config.yaml`, inserts rows into PostgreSQL and upserts vectors into Qdrant.
 
-### 4) Run interactive RAG
+If you change `chunk_max_tokens` or `chunk_overlap_tokens`, re-run this step so the stored chunks are regenerated.
+
+### 3) Start the RAG service
+
+Run the FastAPI app from `rag-service/`:
 
 ```bash
-python lectures_rag.py
+cd rag-service
+uvicorn app.main:app --reload
 ```
 
-Then type questions in terminal. Type `exit` to quit.
+Open `http://127.0.0.1:8000/docs` for the interactive API docs.
 
-## Quick LLM Connectivity Test
+### 4) Query the service
 
-```bash
-python qwenllm.py
-```
+Send questions to `/ask`. The service answers only from retrieved lecture context and returns `I don't know.` when the question is not relevant enough.
 
 ## Troubleshooting
 
-- `AttributeError: QdrantClient has no attribute search`
-  - Use `query_points()` in your retrieval code (already done in current `lectures_rag.py`).
+- PostgreSQL table is empty
+  - Verify `database_url` in `config.yaml`.
+  - Re-run `python processing/chunkpdf.py`.
 
-- No answers or empty retrieval
-  - Verify vectors were inserted into the same collection used by `QDRANT_COLLECTION`.
-  - Verify payload contains `text` field for retrieved points.
+- Model or prompt is too large
+  - Lower `chunk_max_tokens`, `chunk_overlap_tokens`, or `default_top_k`.
+  - The RAG service also truncates retrieved text before sending it to Groq.
 
-- Model/tokenizer mismatch
-  - Keep `EMBED_MODEL` consistent across chunking, indexing, and querying.
+- Question is unrelated to the lectures
+  - Increase `minimum_relevance_score` if you want stricter filtering.
+  - Decrease it if the service is rejecting too many valid questions.
+
+- Qdrant errors
+  - Verify `qdrant_url` in `config.yaml` points to a running Qdrant instance.
 
 ## Notes
 
-- Batch embedding with fixed size (e.g. 64) is normal and efficient.
-- Token-aware chunking in `chunkpdf.py` uses sentence packing and model tokenizer when available.
+- The processing pipeline uses the configured embedding model tokenizer when available.
+- Ingestion endpoints were removed from the RAG API so the service stays focused on answering questions.

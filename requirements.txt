@@ -1,0 +1,2 @@
+-r rag-service/requirements-backend.txt
+-r processing/requirements-processing.txt

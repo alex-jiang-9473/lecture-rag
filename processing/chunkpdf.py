@@ -1,27 +1,24 @@
-import os
 import fitz  # PyMuPDF
-import json
 import re
-from typing import List, Optional
+from pathlib import Path
+from typing import List
 
-try:
-    from transformers import AutoTokenizer
-except Exception:
-    AutoTokenizer = None
+from transformers import AutoTokenizer
+
+from .config import settings
+from .postgres_store import save_chunk_records as save_postgres_chunks
+from .qdrant_store import save_vector_records
 
 # Use FastEmbed default model for consistency with embedding
-EMBED_MODEL = os.getenv('EMBED_MODEL', 'BAAI/bge-small-en-v1.5')
+EMBED_MODEL = settings.embed_model
 _TOKENIZER = None
 
 
 def _get_tokenizer():
     global _TOKENIZER
-    if _TOKENIZER is None and AutoTokenizer:
-        try:
-            _TOKENIZER = AutoTokenizer.from_pretrained(EMBED_MODEL)
-            print(f"Loaded tokenizer for {EMBED_MODEL}")
-        except Exception as e:
-            print(f"Could not load tokenizer: {e}. Falling back to char estimates.")
+    if _TOKENIZER is None:
+        _TOKENIZER = AutoTokenizer.from_pretrained(EMBED_MODEL)
+        print(f"Loaded tokenizer for {EMBED_MODEL}")
     return _TOKENIZER
 
 
@@ -95,35 +92,49 @@ def gather_pdf_text(pdf_path: str, max_tokens: int, overlap_tokens: int) -> List
 
 
 def main():
-    lectures_dir = os.path.join(os.getcwd(), "lectures")
-    if not os.path.isdir(lectures_dir):
+    project_root = Path(__file__).resolve().parents[1]
+    lectures_dir = project_root / "lectures"
+    if not lectures_dir.is_dir():
         print("No 'lectures' directory found at", lectures_dir)
         return
 
-    pdf_files = [os.path.join(lectures_dir, f) for f in os.listdir(lectures_dir) if f.lower().endswith(".pdf")]
+    pdf_files = [str(path) for path in lectures_dir.iterdir() if path.is_file() and path.suffix.lower() == ".pdf"]
     if not pdf_files:
         print("No PDF files found in lectures/")
         return
 
-    max_tokens = int(os.getenv('CHUNK_MAX_TOKENS', os.getenv('CHUNK_MAX_CHARS', '1000')))
-    overlap_tokens = int(os.getenv('CHUNK_OVERLAP_TOKENS', os.getenv('CHUNK_OVERLAP', '200')))
-    chunks_file = os.path.join(os.getcwd(), "lectures_chunks.jsonl")
+    max_tokens = settings.chunk_max_tokens
+    overlap_tokens = settings.chunk_overlap_tokens
+    database_url = settings.database_url.strip()
     next_id = 1
-    with open(chunks_file, "w", encoding="utf-8") as out:
-        for pdf in pdf_files:
-            print("Parsing:", pdf)
-            for text, meta in gather_pdf_text(pdf, max_tokens=max_tokens, overlap_tokens=overlap_tokens):
-                record = {
-                    "id": next_id,
-                    "text": text,
-                    "source": meta["source"],
-                    "page": meta["page"],
-                    "chunk_index": meta["chunk_index"],
-                }
-                out.write(json.dumps(record, ensure_ascii=False) + "\n")
-                next_id += 1
+    chunk_records = []
+    for pdf in pdf_files:
+        print("Parsing:", pdf)
+        for text, meta in gather_pdf_text(pdf, max_tokens=max_tokens, overlap_tokens=overlap_tokens):
+            if not text or not str(text).strip():
+                print(f"Skipping empty chunk: {pdf} page={meta.get('page')} idx={meta.get('chunk_index')}")
+                continue
+            # normalize source: prefer meta.source, fall back to pdf path or filename
+            src = meta.get("source") if isinstance(meta, dict) else None
+            source = str(src or pdf or Path(pdf).name)
+            if not source.strip():
+                print(f"Warning: empty source detected for {pdf}; using filename fallback")
+                source = str(Path(pdf).name)
+            record = {
+                "id": next_id,
+                "text": text,
+                "source": source,
+                "page": meta.get("page", 0) if isinstance(meta, dict) else 0,
+                "chunk_index": meta.get("chunk_index", 0) if isinstance(meta, dict) else 0,
+            }
+            chunk_records.append(record)
+            next_id += 1
 
-    print(f"Wrote {next_id-1} chunks to {chunks_file}")
+    saved_rows = save_postgres_chunks(database_url, chunk_records)
+    print(f"Saved {saved_rows} chunks to PostgreSQL")
+
+    saved_vectors = save_vector_records(chunk_records)
+    print(f"Saved {saved_vectors} chunks to Qdrant")
 
 
 if __name__ == "__main__":
